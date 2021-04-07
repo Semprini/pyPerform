@@ -7,39 +7,48 @@ import time
 from itertools import islice
 
 from datetime import datetime
-from multiprocessing import Process
+from multiprocessing import Process, Lock, Semaphore
 
 import settings
 
 urllib3.disable_warnings()
 
 
-def chunk(it, size):
-    it = iter(it)
-    return iter(lambda: tuple(islice(it, size)), ())
+def dummy_worker(data_chunk, mutex):
+    with mutex:
+        time.sleep(1)
 
 
 class Perform():
 
-    def dummy_worker(self, data_chunk):
-        time.sleep(1)
+    def chunk(self, data_list, count_per_chunk):
+        data_list = iter(data_list)
+        return iter(lambda: tuple(islice(data_list, count_per_chunk)), ())
 
     def run(self, process_count, worker, data_list):
 
-        chunks = list(chunk(data_list, int(len(data_list) / process_count)))
+        chunks = list(self.chunk(data_list, int(len(data_list) / process_count)))
 
-        print("========================================\n")
+        print("========================================")
         print("    Processes:  {}".format(process_count))
         print("    Total Messages: {}".format(len(data_list)))
 
         processes = []
-        for process in range(0, process_count):
-            processes.append(Process(target=worker, args=(chunks[process],), daemon=True))
+        mutexes = []
+        mutex = Semaphore(process_count)
+        for index in range(0, process_count):
+            mutex = Lock()
+            mutex.acquire()
+            mutexes.append(mutex)
+
+            process = Process(target=worker, args=(chunks[index], mutex), daemon=True)
+            processes.append(process)
+            process.start()
 
         start = datetime.now()
+        for mutex in mutexes:
+            mutex.release()
         print("    Started at {}".format(start))
-        for process in processes:
-            process.start()
 
         done = False
         current_processes = processes
@@ -56,13 +65,13 @@ class Perform():
         end = datetime.now()
         duration = end - start
         dur_ms = (duration.seconds * 1000000) + duration.microseconds
-        through = len(data) / (dur_ms / 1000000)
+        through = len(data_list) / (dur_ms / 1000000)
         print("    Ended at {}".format(end))
         print("    Duration: {}".format(duration))
         print("    Throughput: {} messages per second".format(through))
         print("========================================\n")
 
-        return (process_count, len(data), start, end, duration, through)
+        return (process_count, len(data_list), start, end, duration, through)
 
 
 class RestPerform(Perform):
@@ -112,7 +121,8 @@ class RestPerform(Perform):
                 raise Exception("({}) {} \nHeaders: {}".format(response.status_code, response.content, response.headers))
             else:
                 time.sleep(2)
-                return self.post(self.do_auth(), path, data, None)
+                auth = self.do_auth()
+                return self.post(auth, path, data, None)
 
         return session, auth
 
@@ -125,4 +135,4 @@ if __name__ == "__main__":
         data.append("{}".format(random.randint(0, 10000)))
 
     perform = Perform()
-    perform.run(5, perform.dummy_worker, data)
+    perform.run(5, dummy_worker, data)
