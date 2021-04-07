@@ -126,6 +126,14 @@ class RestPerform(Perform):
 
         return session, auth
 
+    def worker(self, data_chunk, mutex):
+        with mutex:
+            time.sleep(2)
+        print("worker done")
+
+    def run(self, process_count, data_list):
+        super().run(process_count, self.worker, data_list)
+
 
 if __name__ == "__main__":
     import random
